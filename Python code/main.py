@@ -1,0 +1,337 @@
+import numpy as np
+from keras.layers import Input, Dense, Dropout, BatchNormalization, Flatten
+from keras.models import Model
+from keras.layers import Layer
+from keras.initializers import he_normal
+import sqlite3
+from scipy.stats import kurtosis
+from scipy.stats import skew
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import MinMaxScaler
+from keras.callbacks import EarlyStopping
+from keras.models import load_model
+import matplotlib.pyplot as plt
+from keras.optimizers import Adam
+from keras.callbacks import ModelCheckpoint
+from pyswarm import pso
+from sklearn.model_selection import StratifiedKFold
+
+
+# Load saved hyperparameters
+loaded_hyperparameters = np.load('xopt.npy')
+learning_rate, dropout_rate, batch_size = loaded_hyperparameters
+
+accuracies = []
+average_val_loss = []
+
+#structure
+main_db_conn = sqlite3.connect('main_data.db')
+synergy_db_conn = sqlite3.connect('synergy.db')
+counter_db_conn = sqlite3.connect('counter.db')
+training_db_conn = sqlite3.connect('formatted_matches.db')
+
+training_cursor = training_db_conn.cursor()
+training_cursor.execute("SELECT radiant_win, radiant1, radiant2, radiant3,	radiant4, radiant5,	dire1, dire2, dire3, dire4,	dire5 FROM formatted_matches")
+
+
+# Initialize lists to store the feature vectors and labels
+feature_vectors = []
+match_outcome_list = []
+
+
+for row in training_cursor.fetchall():
+    radiant_overall = []
+    dire_overall = []
+    radiant_synergy = []
+    radiant_counter = []
+    dire_synergy = []
+    dire_counter = []
+    radiant_heroes = row[1], row[2], row[3], row[4], row[5]
+    dire_heroes = row[6], row[7], row[8], row[9], row[10]
+    match_outcome = row[0]
+
+
+    for p in radiant_heroes:
+        radiant_query = f"SELECT wr, win, loss FROM main_data WHERE id = {p}"
+        radiant_hero_data = main_db_conn.execute(radiant_query).fetchall()
+        radiant_overall.extend(radiant_hero_data)  # Store hero data in the list
+
+    for d in dire_heroes:
+        dire_query = f"SELECT wr, win, loss FROM main_data WHERE id = {d}"
+        dire_hero_data = main_db_conn.execute(dire_query).fetchall()
+        dire_overall.extend(dire_hero_data)  # Store hero data in the list
+
+    for i in radiant_heroes:
+        for j in radiant_heroes:
+            if j != i:
+                synergy_query = f"SELECT wr, win, loss FROM synergy WHERE main_id = {i} AND entry_id = {j}"
+                radiant_synergy_data = synergy_db_conn.execute(synergy_query).fetchall()
+                radiant_synergy.extend(radiant_synergy_data)  # Store synergy data in the list
+
+        for c in dire_heroes:
+            counter_query = f"SELECT wr, win, loss FROM counter WHERE main_id = {i} AND entry_id = {c}"
+            radiant_counter_data = counter_db_conn.execute(counter_query).fetchall()
+            radiant_counter.extend(radiant_counter_data)  # Store counter data in the list
+
+    for u in dire_heroes:
+        for m in dire_heroes:
+            if m != u:
+                synergy_query2 = f"SELECT wr, win, loss FROM synergy WHERE main_id = {u} AND entry_id = {m}"
+                dire_synergy_data = synergy_db_conn.execute(synergy_query2).fetchall()
+                dire_synergy.extend(dire_synergy_data)  # Store synergy data in the list
+
+        for o in radiant_heroes:
+            counter_query2 = f"SELECT wr, win, loss FROM counter WHERE main_id = {u} AND entry_id = {o}"
+            dire_counter_data = counter_db_conn.execute(counter_query2).fetchall()
+            dire_counter.extend(dire_counter_data)  # Store counter data in the list
+
+    # Initialize a statistical feature vector for this match
+    stats_vector = []
+    # Create lists to hold values for statistical measures
+    ro_winrate = []
+    do_winrate = []
+    rs_winrate = []
+    rc_winrate = []
+    ds_winrate = []
+    dc_winrate = []
+
+    # Append the extracted data to respective lists
+    radiant_overall.extend(radiant_hero_data)
+    dire_overall.extend(dire_hero_data)
+    radiant_synergy.extend(radiant_synergy_data)
+    radiant_counter.extend(radiant_counter_data)
+    dire_synergy.extend(dire_synergy_data)
+    dire_counter.extend(dire_counter_data)
+
+    # Convert the lists to NumPy arrays
+    radiant_overall_array = np.array(radiant_overall)
+    dire_overall_array = np.array(dire_overall)
+    radiant_synergy_array = np.array(radiant_synergy)
+    radiant_counter_array = np.array(radiant_counter)
+    dire_synergy_array = np.array(dire_synergy)
+    dire_counter_array = np.array(dire_counter)
+    match_outcome_array = np.array(match_outcome_list)
+
+    # indexes
+    ro_winrate = radiant_overall_array[:, 0]
+    do_winrate = dire_overall_array[:, 0]
+    rs_winrate = radiant_synergy_array[:, 0]
+    rc_winrate = radiant_counter_array[:, 0]
+    ds_winrate = dire_synergy_array[:, 0]
+    dc_winrate = dire_counter_array[:, 0]
+
+    # averages
+    ro_average = round(np.mean(ro_winrate), 3)
+    do_average = round(np.mean(do_winrate), 3)
+    rs_average = round(np.mean(rs_winrate), 3)
+    rc_average = round(np.mean(rc_winrate), 3)
+    ds_average = round(np.mean(ds_winrate), 3)
+    dc_average = round(np.mean(dc_winrate), 3)
+
+    # medians
+    ro_median = round(np.median(ro_winrate), 3)
+    do_median = round(np.median(do_winrate), 3)
+    rs_median = round(np.median(rs_winrate), 3)
+    rc_median = round(np.median(rc_winrate), 3)
+    ds_median = round(np.median(ds_winrate), 3)
+    dc_median = round(np.median(dc_winrate), 3)
+
+    # kurtosis
+    ro_kurtosis = round(kurtosis(ro_winrate), 3)
+    do_kurtosis = round(kurtosis(do_winrate), 3)
+    rs_kurtosis = round(kurtosis(rs_winrate), 3)
+    rc_kurtosis = round(kurtosis(rc_winrate), 3)
+    ds_kurtosis = round(kurtosis(ds_winrate), 3)
+    dc_kurtosis = round(kurtosis(dc_winrate), 3)
+
+    # skewness
+    ro_skew = round(skew(ro_winrate), 3)
+    do_skew = round(skew(do_winrate), 3)
+    rs_skew = round(skew(rs_winrate), 3)
+    rc_skew = round(skew(rc_winrate), 3)
+    ds_skew = round(skew(ds_winrate), 3)
+    dc_skew = round(skew(dc_winrate), 3)
+
+    # standard deviation
+    ro_std = round(np.std(ro_winrate), 3)
+    do_std = round(np.std(do_winrate), 3)
+    rs_std = round(np.std(rs_winrate), 3)
+    rc_std = round(np.std(rc_winrate), 3)
+    ds_std = round(np.std(ds_winrate), 3)
+    dc_std = round(np.std(dc_winrate), 3)
+
+    # variance
+    ro_var = round(np.var(ro_winrate), 3)
+    do_var = round(np.var(do_winrate), 3)
+    rs_var = round(np.var(rs_winrate), 3)
+    rc_var = round(np.var(rc_winrate), 3)
+    ds_var = round(np.var(ds_winrate), 3)
+    dc_var = round(np.var(dc_winrate), 3)
+
+    ro_var_array = np.array([ro_var])
+    do_var_array = np.array([do_var])
+    rs_var_array = np.array([rs_var])
+    rc_var_array = np.array([rc_var])
+    ds_var_array = np.array([ds_var])
+    dc_var_array = np.array([dc_var])
+
+    ro_std_array = np.array([ro_std])
+    do_std_array = np.array([do_std])
+    rs_std_array = np.array([rs_std])
+    rc_std_array = np.array([rc_std])
+    ds_std_array = np.array([ds_std])
+    dc_std_array = np.array([dc_std])
+
+    ro_skew_array = np.array([ro_skew])
+    do_skew_array = np.array([do_skew])
+    rs_skew_array = np.array([rs_skew])
+    rc_skew_array = np.array([rc_skew])
+    ds_skew_array = np.array([ds_skew])
+    dc_skew_array = np.array([dc_skew])
+
+    ro_kurtosis_array = np.array([ro_kurtosis])
+    do_kurtosis_array = np.array([do_kurtosis])
+    rs_kurtosis_array = np.array([rs_kurtosis])
+    rc_kurtosis_array = np.array([rc_kurtosis])
+    ds_kurtosis_array = np.array([ds_kurtosis])
+    dc_kurtosis_array = np.array([dc_kurtosis])
+
+    ro_median_array = np.array([ro_median])
+    do_median_array = np.array([do_median])
+    rs_median_array = np.array([rs_median])
+    rc_median_array = np.array([rc_median])
+    ds_median_array = np.array([ds_median])
+    dc_median_array = np.array([dc_median])
+
+    ro_average_array = np.array([ro_average])
+    do_average_array = np.array([do_average])
+    rs_average_array = np.array([rs_average])
+    rc_average_array = np.array([rc_average])
+    ds_average_array = np.array([ds_average])
+    dc_average_array = np.array([dc_average])
+
+    stats_vector.extend([ro_var, do_var, rs_var, rc_var, ds_var, dc_var,
+                         ro_std, do_std, rs_std, rc_std, ds_std, dc_std,
+                         ro_skew, do_skew, rs_skew, rc_skew, ds_skew, dc_skew,
+                         ro_kurtosis, do_kurtosis, rs_kurtosis, rc_kurtosis, ds_kurtosis, dc_kurtosis,
+                         ro_median, do_median, rs_median, rc_median, ds_median, dc_median,
+                         ro_average, do_average, rs_average, rc_average, ds_average, dc_average])
+
+    # Append the stats_vector and match outcome to the respective lists
+    feature_vectors.append(stats_vector)
+    match_outcome_list.append(match_outcome)
+# Convert the lists to NumPy arrays
+statistical_features = np.array(feature_vectors)
+labels = np.array(match_outcome_list)
+print("Shape of statistical_features:", statistical_features.shape)
+print("Shape of labels:", labels.shape)
+
+main_db_conn.close()
+synergy_db_conn.close()
+counter_db_conn.close()
+training_db_conn.close()
+
+
+
+def fitness(x):
+    # Check if x is a dictionary and extract values accordingly
+    if isinstance(x, dict):
+        learning_rate = x['learning_rate']
+        dropout_rate = x['dropout_rate']
+        batch_size = x['batch_size']
+    else:
+        learning_rate, dropout_rate, batch_size = x
+
+        # Introducing StratifiedKFold
+    num_splits = 10
+    skf = StratifiedKFold(n_splits=num_splits, shuffle=True, random_state=42)
+
+    cumulative_val_loss = 0  # This will accumulate the validation loss over all folds
+
+    # Split data into training and testing sets
+    for train_index, test_index in skf.split(statistical_features, labels):
+        X_train, X_test = statistical_features[train_index], statistical_features[test_index]
+        y_train, y_test = labels[train_index], labels[test_index]
+        scaler = MinMaxScaler()
+        X_train_scaled = scaler.fit_transform(X_train)
+        X_test_scaled = scaler.transform(X_test)
+
+
+
+        input_layer = Input(shape=(36,))
+        num_neurons = [160, 128, 64, 32, 16]
+
+        x = input_layer
+        for i in range(5):
+            x = Dropout(dropout_rate)(x)  # Note that we're using the dropout_rate from the arguments
+            x = BatchNormalization()(x)
+            x = Dense(num_neurons[i], kernel_initializer=he_normal(), activation='elu')(x)
+
+        output_layer = Dense(1, activation='sigmoid')(x)
+        model = Model(inputs=input_layer, outputs=output_layer)
+
+        optimizer = Adam(learning_rate=learning_rate)  # Using learning_rate from the arguments
+        model.compile(optimizer=optimizer, loss='binary_crossentropy', metrics=['accuracy'])
+
+        early_stopping = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
+
+        # Train the model
+        history = model.fit(X_train_scaled, y_train, epochs=50, batch_size=int(batch_size), validation_data=(X_test_scaled, y_test),
+                  callbacks=[early_stopping])
+
+        # Save the accuracy for this fold
+        _, accuracy = model.evaluate(X_test_scaled, y_test, verbose=0)
+        accuracies.append(accuracy)
+
+        # Plotting training and validation loss
+        plt.figure(figsize=(12, 4))
+
+        # First subplot for the loss
+        plt.subplot(1, 2, 1)
+        plt.plot(history.history['loss'], label='Training Loss')
+        plt.plot(history.history['val_loss'], label='Validation Loss')
+        plt.title('Training and Validation Loss')
+        plt.xlabel('Epoch')
+        plt.ylabel('Loss Value')
+        plt.legend()
+
+        # Second subplot for the accuracy
+        plt.subplot(1, 2, 2)
+        plt.plot(history.history['accuracy'], label='Training Accuracy')
+        plt.plot(history.history['val_accuracy'], label='Validation Accuracy')
+        plt.title('Training and Validation Accuracy')
+        plt.xlabel('Epoch')
+        plt.ylabel('Accuracy Value')
+        plt.legend()
+
+        plt.tight_layout()
+        plt.show()
+
+
+    # Calculate mean accuracy, standard deviation and standard error
+    mean_accuracy = np.mean(accuracies)
+    std_deviation = np.std(accuracies)
+    std_error = std_deviation / np.sqrt(num_splits)
+
+    # Calculate 95% confidence interval
+    confidence_interval = (mean_accuracy - 1.96 * std_error, mean_accuracy + 1.96 * std_error)
+
+    # Print the table
+    print("------------------------------------------------")
+    print("| Metric             | Value                   |")
+    print("------------------------------------------------")
+    print(f"| Accuracy           | {mean_accuracy * 100:.2f}%                |")
+    print(f"| 95% CI             | ({confidence_interval[0] * 100:.2f}%, {confidence_interval[1] * 100:.2f}%)      |")
+    print(f"| Standard Deviation | {std_deviation * 100:.2f}                |")
+    print(f"| Standard Error     | {std_error * 100:.2f}                 |")
+    print("------------------------------------------------")
+
+# Call the function using the loaded hyperparameters
+loss_result = fitness(loaded_hyperparameters)
+print("Loaded hyperparameters:", loaded_hyperparameters)
+
+#lb = [0.0001, 0.1, 10]   # Lower bounds for learning_rate, dropout_rate, batch_size
+#ub = [0.1, 0.5, 1000]  # Upper bounds for learning_rate, dropout_rate, batch_size
+
+#xopt, fopt = pso(fitness, lb, ub)
+#np.save( 'xopt.npy', xopt) # Save xopt to a filem,
