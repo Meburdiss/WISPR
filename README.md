@@ -4,7 +4,7 @@ Each match is a battle between a combination of 10 unique heroes seperated into 
 The model calculates an overall, synergy, and counter winrate for each 5-hero team.
 I find the average, median, kurtosis, skewness, standard deviation, and variance for each of these 6 metrics. The match outcome is then predicted using the metrics each team has calculated.
 
-Each 1 hero has 10 winrates associated with it. Their overall winrate, and 9 pairings of this hero's winrate with his enemies and allies (dynamically factoring in it's weknesses and strenghts).
+Each 1 hero has 10 winrates associated with it. Their overall winrate, and 9 pairings of this hero's winrate with his 5 enemies and 4 allies (dynamically factoring in it's weknesses and strenghts).
 
 I webscraped all of my data from dota2portracker.com, where I used beutifulsoup to capture the overall winrates and the winrates for counter-pick/synergy scenarios.
 
