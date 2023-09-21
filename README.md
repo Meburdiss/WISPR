@@ -1,6 +1,6 @@
 # WISPR
 Here I have webscraped the winrates of DOTA 2 heroes played by the top .1% of DOTA 2 players and trained a deep learning model to predict the outcomes of general matches played in public matchmaking. 
-Each match is a combination of 10 different heroes, seperated into 2 teams, battle.
+Each match is a battle between a combination of 10 unique heroes seperated into 2 teams
 The model calculates an overall, synergy, and counter winrate for each 5-hero team.
 I find the average, median, kurtosis, skewness, standard deviation, and variance for each of these 6 metrics. The match outcome is then predicted using the metrics each team has calculated.
 
